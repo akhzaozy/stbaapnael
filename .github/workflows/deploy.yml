@@ -27,7 +27,7 @@ jobs:
       # 3️⃣ Kirim file ke server (cepat, tidak nunggu composer)
       - name: Upload to Kucingarong Lite
         env:
-          AUTOHOST_URL: "https://cicak.akhzafachrozy.my.id/deploy-lite.php"  # endpoint baru
+          AUTOHOST_URL: "https://cicak.akhzafachrozy.my.id"  # endpoint baru
           REPO_NAME: ${{ github.event.repository.name }}
         run: |
           echo "🚀 Uploading $REPO_NAME..."
