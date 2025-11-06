@@ -1,44 +1,291 @@
-name: 🚀 Auto Copy to Kucingarong
+name: 🐾 Kucingarong Deploy
 
 on:
   push:
-    branches:
-      - main
-      - development
-      - feature/**
+    branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      subdomain:
+        description: 'Subdomain name (optional - uses repo name if empty)'
+        required: false
+        type: string
+      force_full:
+        description: 'Force full deployment (ignore incremental)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
+    
     steps:
-      # 1️⃣ Ambil source code
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # 2️⃣ Kompres cepat (tanpa vendor/node_modules)
-      - name: Create ZIP
-        run: |
+    - name: 📥 Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch all history for comparison
+      
+    - name: 🔧 Setup Environment
+      id: setup
+      run: |
+        # Get repo name
+        REPO_NAME="${GITHUB_REPOSITORY##*/}"
+        echo "repo_name=$REPO_NAME" >> $GITHUB_OUTPUT
+        
+        # Use custom subdomain or repo name
+        SUBDOMAIN="${{ github.event.inputs.subdomain }}"
+        if [ -z "$SUBDOMAIN" ]; then
+          SUBDOMAIN="$REPO_NAME"
+        fi
+        echo "subdomain=$SUBDOMAIN" >> $GITHUB_OUTPUT
+        
+        echo "📦 Repository: $REPO_NAME"
+        echo "🌐 Subdomain: $SUBDOMAIN"
+    
+    - name: 🔍 Detect Changed Files
+      id: changes
+      run: |
+        FORCE_FULL="${{ github.event.inputs.force_full }}"
+        
+        if [ "$FORCE_FULL" = "true" ]; then
+          echo "mode=full" >> $GITHUB_OUTPUT
+          echo "📦 Mode: Full deployment (forced)"
+        elif [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "${{ github.event.before }}" ]; then
+          echo "mode=full" >> $GITHUB_OUTPUT
+          echo "📦 Mode: Full deployment (initial or manual)"
+        else
+          # Get changed files since last commit
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
+          
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "mode=full" >> $GITHUB_OUTPUT
+            echo "📦 Mode: Full deployment (no changes detected)"
+          else
+            echo "mode=incremental" >> $GITHUB_OUTPUT
+            echo "$CHANGED_FILES" > changed_files.txt
+            echo "📦 Mode: Incremental deployment"
+            echo "📝 Changed files:"
+            cat changed_files.txt
+            
+            # Count files
+            FILE_COUNT=$(wc -l < changed_files.txt)
+            echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
+          fi
+        fi
+    
+    - name: 📦 Create Deployment Package
+      run: |
+        MODE="${{ steps.changes.outputs.mode }}"
+        
+        if [ "$MODE" = "incremental" ]; then
+          echo "📦 Creating incremental package..."
+          
+          # Create zip with only changed files
+          cat changed_files.txt | zip -@ deploy.zip
+          
+          # Always include critical files if they exist
+          CRITICAL_FILES=("composer.json" "composer.lock" ".env.example" "artisan")
+          for file in "${CRITICAL_FILES[@]}"; do
+            if [ -f "$file" ] && ! grep -q "^$file$" changed_files.txt; then
+              zip -u deploy.zip "$file" 2>/dev/null || true
+            fi
+          done
+          
+          echo "✅ Incremental package created: $(du -h deploy.zip | cut -f1)"
+          echo "📊 Files: ${{ steps.changes.outputs.file_count }}"
+        else
+          echo "📦 Creating full package..."
+          
+          # Exclude unnecessary files
           zip -r deploy.zip . \
-            -x "*.git*" "*.github*" "node_modules/*" "vendor/*" "storage/*" "*.env" "*.log"
-
-      # 3️⃣ Upload ZIP ke server (hanya copy, selesai langsung)
-      - name: Upload to STB
-        env:
-          AUTOHOST_URL: "https://deploy.akhzafachrozy.my.id/"  # GANTI ke IP STB kamu
-          REPO_NAME: ${{ github.event.repository.name }}
-        run: |
-          echo "🚀 Uploading $REPO_NAME..."
-          RESPONSE=$(curl -s -S -m 60 --connect-timeout 10 \
-            -X POST \
-            -F "repo=$REPO_NAME" \
-            -F "file=@deploy.zip" \
-            "$AUTOHOST_URL")
-          echo "📜 ===== RESPONSE ====="
-          echo "$RESPONSE"
-          echo "📜 ===================="
-
-      # 4️⃣ Hapus ZIP setelah upload
-      - name: Cleanup
-        run: rm -f deploy.zip
+            -x "*.git*" \
+            -x "node_modules/*" \
+            -x "*.github/*" \
+            -x "tests/*" \
+            -x "*.md" \
+            -x ".env" \
+            -x "storage/logs/*" \
+            -x "vendor/*" \
+            -x ".DS_Store" \
+            -x "*.log"
+          
+          echo "✅ Full package created: $(du -h deploy.zip | cut -f1)"
+        fi
+    
+    - name: 🚀 Upload to Server
+      id: upload
+      run: |
+        MODE="${{ steps.changes.outputs.mode }}"
+        
+        RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+          -F "file=@deploy.zip" \
+          -F "repo=${{ steps.setup.outputs.repo_name }}" \
+          -F "subdomain=${{ steps.setup.outputs.subdomain }}" \
+          -F "mode=$MODE" \
+          -F "commit_sha=${{ github.sha }}" \
+          "https://deploy.akhzafachrozy.my.id/")
+        
+        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        BODY=$(echo "$RESPONSE" | head -n-1)
+        
+        echo "📡 Response Code: $HTTP_CODE"
+        echo "$BODY"
+        
+        if [ "$HTTP_CODE" -eq 200 ]; then
+          echo "✅ Upload successful!"
+          echo "response=$BODY" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Upload failed with code $HTTP_CODE"
+          exit 1
+        fi
+    
+    - name: ✅ Deployment Complete
+      run: |
+        MODE="${{ steps.changes.outputs.mode }}"
+        
+        echo "================================================"
+        echo "🎉 Deployment Initiated Successfully!"
+        echo "================================================"
+        echo ""
+        echo "📦 Repository: ${{ steps.setup.outputs.repo_name }}"
+        echo "🌐 Subdomain: ${{ steps.setup.outputs.subdomain }}"
+        echo "📊 Mode: $MODE"
+        
+        if [ "$MODE" = "incremental" ]; then
+          echo "📝 Files updated: ${{ steps.changes.outputs.file_count }}"
+        fi
+        
+        echo ""
+        echo "⏳ Background Processing:"
+        
+        if [ "$MODE" = "full" ]; then
+          echo "   1. ✅ Files uploaded (full)"
+          echo "   2. 🔄 Installing dependencies (composer install)"
+          echo "   3. 🔄 Configuring environment (.env)"
+          echo "   4. 🔄 Generating application key"
+          echo "   5. 🔄 Starting Laravel service"
+          echo "   6. 🔄 Setting up Cloudflare tunnel"
+        else
+          echo "   1. ✅ Files uploaded (incremental)"
+          echo "   2. 🔄 Extracting changed files"
+          echo "   3. 🔄 Running composer update (if needed)"
+          echo "   4. 🔄 Restarting Laravel service"
+        fi
+        
+        echo ""
+        echo "🔗 Your app will be available at:"
+        echo "   https://${{ steps.setup.outputs.subdomain }}.trycloudflare.com"
+        echo ""
+        
+        if [ "$MODE" = "full" ]; then
+          echo "⏱️  Setup usually takes 2-5 minutes"
+        else
+          echo "⏱️  Update usually takes 30-60 seconds"
+        fi
+        
+        echo "📊 Check logs at: /var/log/bg_lite_${{ steps.setup.outputs.repo_name }}.log"
+        echo "================================================"
+    
+    - name: 📝 Deployment Summary
+      if: always()
+      run: |
+        MODE="${{ steps.changes.outputs.mode }}"
+        
+        cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+        ## 🐾 Kucingarong Deployment
+        
+        ### 📊 Deployment Status
+        - **Status**: ✅ Upload Complete - Processing in Background
+        - **Repository**: `${{ steps.setup.outputs.repo_name }}`
+        - **Subdomain**: `${{ steps.setup.outputs.subdomain }}`
+        - **Mode**: `$MODE`
+        - **Commit**: `${{ github.sha }}`
+        EOF
+        
+        if [ "$MODE" = "incremental" ]; then
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+        - **Files Updated**: ${{ steps.changes.outputs.file_count }}
+        EOF
+        fi
+        
+        cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+        
+        ### 🔗 Access Your Application
+        ```
+        https://${{ steps.setup.outputs.subdomain }}.trycloudflare.com
+        ```
+        
+        ### ⏳ Background Tasks
+        EOF
+        
+        if [ "$MODE" = "full" ]; then
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+        The following processes are running on the server:
+        1. 📦 Installing dependencies (composer install)
+        2. 🔧 Setting up environment (.env)
+        3. 🔑 Generating application key
+        4. 🚀 Starting Laravel service (systemd)
+        5. 🌐 Connecting Cloudflare tunnel
+        
+        **Estimated time**: 2-5 minutes
+        EOF
+        else
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+        The following processes are running on the server:
+        1. 📦 Extracting changed files
+        2. 🔄 Updating dependencies (if needed)
+        3. 🔄 Clearing cache
+        4. 🔄 Restarting service
+        
+        **Estimated time**: 30-60 seconds
+        EOF
+        fi
+        
+        cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+        
+        ### 📊 Monitoring
+        - **Server Logs**: `/var/log/bg_lite_${{ steps.setup.outputs.repo_name }}.log`
+        - **Deploy Logs**: `/www/wwwroot/deploy.log`
+        - **Service**: `laravel-${{ steps.setup.outputs.repo_name }}`
+        
+        ### 🛠️ Management Commands
+        ```bash
+        # Check service status
+        sudo systemctl status laravel-${{ steps.setup.outputs.repo_name }}
+        
+        # View logs
+        sudo journalctl -u laravel-${{ steps.setup.outputs.repo_name }} -f
+        
+        # Restart service
+        sudo systemctl restart laravel-${{ steps.setup.outputs.repo_name }}
+        ```
+        
+        ### 🔄 Deployment Type
+        EOF
+        
+        if [ "$MODE" = "full" ]; then
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+        This was a **full deployment**. All files were uploaded and processed.
+        
+        To force incremental deployment next time, ensure you're pushing to an existing deployment.
+        EOF
+        else
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+        This was an **incremental deployment**. Only changed files were uploaded.
+        
+        Changed files:
+        ```
+        EOF
+          cat changed_files.txt >> $GITHUB_STEP_SUMMARY
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+        ```
+        
+        To force full deployment, use manual dispatch with "Force full deployment" checked.
+        EOF
+        fi
+        
+        cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+        
+        ---
+        ⏱️ *Deployment initiated at: $(date)*
+        EOF
