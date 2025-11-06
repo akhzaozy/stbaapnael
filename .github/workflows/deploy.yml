@@ -120,14 +120,18 @@ jobs:
         HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
         BODY=$(echo "$RESPONSE" | head -n-1)
         
-        echo "📡 Response: $HTTP_CODE"
+        echo "📡 Response Code: $HTTP_CODE"
         
         if [ "$HTTP_CODE" -eq 200 ]; then
           echo "✅ Upload successful!"
-          echo "$BODY"
-          echo "response=$BODY" >> $GITHUB_OUTPUT
+          # Compact JSON for output (remove newlines and spaces)
+          COMPACT_JSON=$(echo "$BODY" | jq -c '.')
+          echo "response<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMPACT_JSON" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "Response: $COMPACT_JSON"
         else
-          echo "❌ Upload failed"
+          echo "❌ Upload failed with code $HTTP_CODE"
           echo "$BODY"
           exit 1
         fi
@@ -139,8 +143,13 @@ jobs:
       id: parse
       run: |
         RESPONSE='${{ steps.upload.outputs.response }}'
-        PORT=$(echo "$RESPONSE" | grep -o '"port":[0-9]*' | cut -d':' -f2 || echo "0")
+        PORT=$(echo "$RESPONSE" | jq -r '.port // 0')
+        STATUS=$(echo "$RESPONSE" | jq -r '.status // "unknown"')
+        
         echo "port=$PORT" >> $GITHUB_OUTPUT
+        echo "status=$STATUS" >> $GITHUB_OUTPUT
+        
+        echo "✅ Status: $STATUS"
         echo "✅ Port: $PORT"
 
     # =======================================================
