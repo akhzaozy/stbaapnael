@@ -108,7 +108,8 @@ jobs:
         echo "🌐 Uploading to server..."
         
         RESPONSE=$(curl -s -S -w "\n%{http_code}" -X POST \
-          --max-time 30 \
+          --max-time 15 \
+          --connect-timeout 10 \
           -F "file=@deploy.zip" \
           -F "repo=${{ steps.setup.outputs.repo_name }}" \
           -F "subdomain=${{ steps.setup.outputs.subdomain }}" \
