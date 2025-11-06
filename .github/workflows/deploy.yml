@@ -1,4 +1,4 @@
-name: 🐾 Kucingarong Deploy v6.0
+name: 🐾 Kucingarong Quick Deploy v7.0
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
         required: false
         type: string
       force_full:
-        description: 'Force full deployment (ignore incremental detection)'
+        description: 'Force full deployment'
         required: false
         type: boolean
         default: false
@@ -18,10 +18,11 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
     # =======================================================
-    # 📥 Step 1: Checkout Repository
+    # 📥 Checkout Repository
     # =======================================================
     - name: 📥 Checkout Repository
       uses: actions/checkout@v4
@@ -29,7 +30,7 @@ jobs:
         fetch-depth: 0
 
     # =======================================================
-    # ⚙️ Step 2: Setup Environment Variables
+    # ⚙️ Setup Environment
     # =======================================================
     - name: 🔧 Setup Environment
       id: setup
@@ -45,7 +46,7 @@ jobs:
         echo "🌐 Subdomain: $SUBDOMAIN"
 
     # =======================================================
-    # 🔍 Step 3: Detect Changed Files for Incremental Deploy
+    # 🔍 Detect Changes (Smart Deploy)
     # =======================================================
     - name: 🔍 Detect Changed Files
       id: changes
@@ -53,146 +54,96 @@ jobs:
         FORCE_FULL="${{ github.event.inputs.force_full }}"
         if [ "$FORCE_FULL" = "true" ]; then
           echo "mode=full" >> $GITHUB_OUTPUT
-          echo "📦 Mode: Full deployment (forced)"
+          echo "📦 Mode: Full (forced)"
         elif [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "${{ github.event.before }}" ]; then
           echo "mode=full" >> $GITHUB_OUTPUT
-          echo "📦 Mode: Full deployment (manual/initial)"
+          echo "📦 Mode: Full (manual/initial)"
         else
-          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} || echo "")
           if [ -z "$CHANGED_FILES" ]; then
             echo "mode=full" >> $GITHUB_OUTPUT
-            echo "📦 Mode: Full (no changes detected)"
+            echo "📦 Mode: Full (no changes)"
           else
-            # Check if critical files changed
-            CRITICAL_CHANGED=$(echo "$CHANGED_FILES" | grep -E "(composer\.(json|lock)|artisan|\.env\.example|database/)" || true)
+            CRITICAL_CHANGED=$(echo "$CHANGED_FILES" | grep -E "(composer\.(json|lock)|artisan|\.env\.example|database/|config/)" || true)
             if [ -n "$CRITICAL_CHANGED" ]; then
               echo "mode=full" >> $GITHUB_OUTPUT
               echo "📦 Mode: Full (critical files changed)"
             else
               echo "mode=incremental" >> $GITHUB_OUTPUT
-              echo "📦 Mode: Incremental"
+              echo "📦 Mode: Incremental ($(echo "$CHANGED_FILES" | wc -l) files)"
             fi
-            echo "$CHANGED_FILES" > changed_files.txt
-            echo "📝 Changed files:"
-            cat changed_files.txt
-            FILE_COUNT=$(wc -l < changed_files.txt)
-            echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           fi
         fi
 
     # =======================================================
-    # 📦 Step 4: Create ZIP Package (Full or Incremental)
+    # 📦 Create ZIP Package
     # =======================================================
-    - name: 📦 Create Deployment Package
+    - name: 📦 Create Package
       run: |
         MODE="${{ steps.changes.outputs.mode }}"
-        if [ "$MODE" = "incremental" ]; then
-          echo "📦 Creating incremental package..."
-          cat changed_files.txt | zip -@ deploy.zip
-          CRITICAL_FILES=("composer.json" "composer.lock" "artisan" ".env.example")
-          for file in "${CRITICAL_FILES[@]}"; do
-            if [ -f "$file" ] && ! grep -q "^$file$" changed_files.txt 2>/dev/null; then
-              zip -u deploy.zip "$file" 2>/dev/null || true
-            fi
-          done
-          echo "✅ Incremental package created ($(du -h deploy.zip | cut -f1))"
-        else
-          echo "📦 Creating full package..."
-          zip -r deploy.zip . \
-            -x "*.git*" \
-            -x "node_modules/*" \
-            -x "vendor/*" \
-            -x "*.github/*" \
-            -x "storage/logs/*" \
-            -x ".env" \
-            -x "*.log" \
-            -x "tests/*" \
-            -x ".DS_Store" \
-            -x "*.md"
-          echo "✅ Full package created ($(du -h deploy.zip | cut -f1))"
-        fi
+        echo "📦 Creating deployment package..."
+        
+        # Always include critical files for proper deployment
+        zip -r deploy.zip . \
+          -x "*.git*" \
+          -x "node_modules/*" \
+          -x "vendor/*" \
+          -x "*.github/*" \
+          -x "storage/logs/*" \
+          -x ".env" \
+          -x "*.log" \
+          -x "tests/*" \
+          -x ".DS_Store"
+        
+        SIZE=$(du -h deploy.zip | cut -f1)
+        echo "✅ Package created: $SIZE"
 
     # =======================================================
-    # 🚀 Step 5: Upload to Server via CURL
+    # 🚀 Quick Upload (No Processing on GitHub Side)
     # =======================================================
-    - name: 🚀 Upload to Server
+    - name: 🚀 Quick Upload to Server
       id: upload
       run: |
         MODE="${{ steps.changes.outputs.mode }}"
-        echo "🌐 Uploading deploy.zip to https://deploy.akhzafachrozy.my.id/"
+        echo "🌐 Uploading to server..."
+        
         RESPONSE=$(curl -s -S -w "\n%{http_code}" -X POST \
+          --max-time 30 \
           -F "file=@deploy.zip" \
           -F "repo=${{ steps.setup.outputs.repo_name }}" \
           -F "subdomain=${{ steps.setup.outputs.subdomain }}" \
           -F "mode=$MODE" \
           -F "commit_sha=${{ github.sha }}" \
           "https://deploy.akhzafachrozy.my.id/")
+        
         HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
         BODY=$(echo "$RESPONSE" | head -n-1)
-        echo "📡 Response Code: $HTTP_CODE"
-        echo "$BODY"
+        
+        echo "📡 Response: $HTTP_CODE"
+        
         if [ "$HTTP_CODE" -eq 200 ]; then
           echo "✅ Upload successful!"
+          echo "$BODY"
           echo "response=$BODY" >> $GITHUB_OUTPUT
         else
-          echo "❌ Upload failed with code $HTTP_CODE"
+          echo "❌ Upload failed"
+          echo "$BODY"
           exit 1
         fi
 
     # =======================================================
-    # 🧾 Step 6: Parse Response & Extract Port Information
+    # 🧾 Parse Response
     # =======================================================
-    - name: 🧠 Extract Deployment Details
+    - name: 🧠 Extract Details
       id: parse
       run: |
         RESPONSE='${{ steps.upload.outputs.response }}'
-        PORT=$(echo "$RESPONSE" | grep -o '"port":[0-9]*' | cut -d':' -f2)
-        REPO="${{ steps.setup.outputs.repo_name }}"
-        SUBDOMAIN="${{ steps.setup.outputs.subdomain }}"
-        MODE="${{ steps.changes.outputs.mode }}"
+        PORT=$(echo "$RESPONSE" | grep -o '"port":[0-9]*' | cut -d':' -f2 || echo "0")
         echo "port=$PORT" >> $GITHUB_OUTPUT
-        echo "📊 Detected deployment details:"
-        echo "   Repo      : $REPO"
-        echo "   Subdomain : $SUBDOMAIN"
-        echo "   Mode      : $MODE"
-        echo "   Port      : $PORT"
+        echo "✅ Port: $PORT"
 
     # =======================================================
-    # ✅ Step 7: Deployment Summary in Console
-    # =======================================================
-    - name: ✅ Deployment Complete
-      run: |
-        MODE="${{ steps.changes.outputs.mode }}"
-        PORT="${{ steps.parse.outputs.port }}"
-        SERVER_IP="${{ secrets.SERVER_IP }}"
-        echo "================================================"
-        echo "🎉 Deployment Initiated Successfully!"
-        echo "================================================"
-        echo "📦 Repository : ${{ steps.setup.outputs.repo_name }}"
-        echo "🌐 Subdomain  : ${{ steps.setup.outputs.subdomain }}"
-        echo "📊 Mode       : $MODE"
-        echo "🔢 Port       : $PORT"
-        echo ""
-        if [ "$MODE" = "incremental" ]; then
-          echo "📝 Incremental update started..."
-        else
-          echo "🚀 Full setup in progress..."
-        fi
-        echo ""
-        echo "🔗 Direct Access (without Cloudflare):"
-        if [ -n "$SERVER_IP" ]; then
-          echo "   http://$SERVER_IP:$PORT"
-        else
-          echo "   http://YOUR_SERVER_IP:$PORT"
-        fi
-        echo ""
-        echo "⏳ Check server logs:"
-        echo "   /var/log/bg_lite_${{ steps.setup.outputs.repo_name }}.log"
-        echo "   /var/log/laravel-${{ steps.setup.outputs.repo_name }}.log"
-        echo "================================================"
-
-    # =======================================================
-    # 📝 Step 8: Deployment Summary in GitHub UI (Markdown)
+    # ✅ Summary
     # =======================================================
     - name: 📝 Deployment Summary
       if: always()
@@ -200,115 +151,51 @@ jobs:
         MODE="${{ steps.changes.outputs.mode }}"
         PORT="${{ steps.parse.outputs.port }}"
         REPO="${{ steps.setup.outputs.repo_name }}"
-        SUBDOMAIN="${{ steps.setup.outputs.subdomain }}"
         SERVER_IP="${{ secrets.SERVER_IP }}"
-        cat >> $GITHUB_STEP_SUMMARY << EOF
-        ## 🐾 Kucingarong Deployment Report
         
-        ### 📊 Deployment Information
+        cat >> $GITHUB_STEP_SUMMARY << EOF
+        ## 🐾 Kucingarong Quick Deploy
+        
+        ### ✅ Upload Completed
         - **Repository**: \`$REPO\`
-        - **Subdomain**: \`$SUBDOMAIN\`
         - **Mode**: \`$MODE\`
         - **Port**: \`$PORT\`
-        - **Commit**: \`${{ github.sha }}\`
+        - **Status**: Files uploaded successfully
         
-        ### 🔗 Access Your Application
+        ### ⏳ Background Processing
+        Server is now processing:
+        1. 🔧 Installing dependencies (composer)
+        2. ⚙️ Setting up Laravel environment
+        3. 🔑 Generating app keys
+        4. 🗄️ Running migrations
+        5. 🚀 Starting Laravel service
+        
+        **Estimated time**: 3-5 minutes
+        
+        ### 🔗 Access URL
         EOF
-
-        if [ -n "$SERVER_IP" ]; then
-          echo "**Direct URL**: [http://$SERVER_IP:$PORT](http://$SERVER_IP:$PORT)" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -n "$SERVER_IP" ] && [ "$PORT" != "0" ]; then
+          echo "**Direct**: [http://$SERVER_IP:$PORT](http://$SERVER_IP:$PORT)" >> $GITHUB_STEP_SUMMARY
         else
-          echo "**Direct URL**: \`http://YOUR_SERVER_IP:$PORT\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Port**: \`$PORT\` (use your server IP)" >> $GITHUB_STEP_SUMMARY
         fi
-
+        
         cat >> $GITHUB_STEP_SUMMARY << EOF
         
-        > 💡 **Note**: Setup Cloudflare Tunnel manually to get custom domain
-        
-        ---
-        
-        ### 🧠 Server Details
-        | Item | Path / Command |
-        |------|----------------|
-        | **Laravel Service** | \`laravel-$REPO\` |
-        | **App Directory** | \`/www/wwwroot/hosting/$REPO\` |
-        | **Background Log** | \`/var/log/bg_lite_$REPO.log\` |
-        | **Laravel Log** | \`/var/log/laravel-$REPO.log\` |
-        | **Port** | \`$PORT\` |
-        | **Deploy Log** | \`/www/wwwroot/deploy.log\` |
-        
-        ---
-        
-        ### ⚙️ Useful Commands
+        ### 📊 Monitor Progress
         \`\`\`bash
-        # Check Laravel service status
+        # Check background process
+        sudo tail -f /var/log/bg_deploy_$REPO.log
+        
+        # Check Laravel service
         sudo systemctl status laravel-$REPO
         
-        # View Laravel realtime logs
-        sudo journalctl -u laravel-$REPO -f
-        
-        # View background deployment logs
-        sudo tail -f /var/log/bg_lite_$REPO.log
-        
-        # Restart Laravel service
-        sudo systemctl restart laravel-$REPO
-        
-        # Access application directory
-        cd /www/wwwroot/hosting/$REPO
+        # View Laravel logs
+        sudo tail -f /var/log/laravel-$REPO.log
         \`\`\`
         
         ---
-        ### ⏱️ Deployment Progress
-        EOF
-
-        if [ "$MODE" = "full" ]; then
-          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
-        1. ✅ Files uploaded (full)
-        2. ✅ Environment setup (.env)
-        3. ✅ Storage directories created
-        4. ✅ Composer install
-        5. ✅ Laravel key generated
-        6. ✅ Database migrations
-        7. ✅ Cache optimization
-        8. ✅ Laravel service started
-        
-        **Estimated time:** 2–5 minutes
-        EOF
-        else
-          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
-        1. ✅ Incremental files uploaded
-        2. ✅ Files synced intelligently
-        3. ✅ Composer update (if needed)
-        4. ✅ Cache cleared & rebuilt
-        5. ✅ Service restarted
-        
-        **Estimated time:** 30–60 seconds
-        EOF
-        fi
-
-        cat >> $GITHUB_STEP_SUMMARY << EOF
-        
-        ---
-        
-        ### 🌐 Setup Cloudflare Tunnel (Manual)
-        \`\`\`bash
-        # Install cloudflared if not installed
-        wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-        sudo dpkg -i cloudflared-linux-amd64.deb
-        
-        # Create tunnel
-        cloudflared tunnel create $SUBDOMAIN
-        
-        # Configure tunnel to point to port $PORT
-        cloudflared tunnel route dns $SUBDOMAIN $SUBDOMAIN.yourdomain.com
-        
-        # Run tunnel
-        cloudflared tunnel --url http://localhost:$PORT run $SUBDOMAIN
-        \`\`\`
-        
-        ---
-        ⏱️ *Deployment started at: $(date)*  
-        ✅ **Laravel running on port:** $PORT  
-        📁 **Location:** \`/www/wwwroot/hosting/$REPO\`  
-        🐾 *Powered by Kucingarong Lite Deploy v6.0*
+        *⚡ Quick deploy completed in < 1 minute*  
+        *🔄 Full setup running in background on server*
         EOF
