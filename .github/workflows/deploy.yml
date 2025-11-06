@@ -1,4 +1,4 @@
-name: 🐾 Kucingarong Deploy v5.5
+name: 🐾 Kucingarong Deploy v6.0
 
 on:
   push:
@@ -63,7 +63,15 @@ jobs:
             echo "mode=full" >> $GITHUB_OUTPUT
             echo "📦 Mode: Full (no changes detected)"
           else
-            echo "mode=incremental" >> $GITHUB_OUTPUT
+            # Check if critical files changed
+            CRITICAL_CHANGED=$(echo "$CHANGED_FILES" | grep -E "(composer\.(json|lock)|artisan|\.env\.example|database/)" || true)
+            if [ -n "$CRITICAL_CHANGED" ]; then
+              echo "mode=full" >> $GITHUB_OUTPUT
+              echo "📦 Mode: Full (critical files changed)"
+            else
+              echo "mode=incremental" >> $GITHUB_OUTPUT
+              echo "📦 Mode: Incremental"
+            fi
             echo "$CHANGED_FILES" > changed_files.txt
             echo "📝 Changed files:"
             cat changed_files.txt
@@ -83,7 +91,7 @@ jobs:
           cat changed_files.txt | zip -@ deploy.zip
           CRITICAL_FILES=("composer.json" "composer.lock" "artisan" ".env.example")
           for file in "${CRITICAL_FILES[@]}"; do
-            if [ -f "$file" ] && ! grep -q "^$file$" changed_files.txt; then
+            if [ -f "$file" ] && ! grep -q "^$file$" changed_files.txt 2>/dev/null; then
               zip -u deploy.zip "$file" 2>/dev/null || true
             fi
           done
@@ -148,9 +156,6 @@ jobs:
         echo "   Subdomain : $SUBDOMAIN"
         echo "   Mode      : $MODE"
         echo "   Port      : $PORT"
-        echo ""
-        echo "🔗 App URL: https://$SUBDOMAIN.akhzafachrozy.my.id"
-        echo "📡 Laravel running on port: $PORT"
 
     # =======================================================
     # ✅ Step 7: Deployment Summary in Console
@@ -159,6 +164,7 @@ jobs:
       run: |
         MODE="${{ steps.changes.outputs.mode }}"
         PORT="${{ steps.parse.outputs.port }}"
+        SERVER_IP="${{ secrets.SERVER_IP }}"
         echo "================================================"
         echo "🎉 Deployment Initiated Successfully!"
         echo "================================================"
@@ -173,9 +179,16 @@ jobs:
           echo "🚀 Full setup in progress..."
         fi
         echo ""
-        echo "🔗 https://${{ steps.setup.outputs.subdomain }}.akhzafachrozy.my.id"
+        echo "🔗 Direct Access (without Cloudflare):"
+        if [ -n "$SERVER_IP" ]; then
+          echo "   http://$SERVER_IP:$PORT"
+        else
+          echo "   http://YOUR_SERVER_IP:$PORT"
+        fi
+        echo ""
         echo "⏳ Check server logs:"
         echo "   /var/log/bg_lite_${{ steps.setup.outputs.repo_name }}.log"
+        echo "   /var/log/laravel-${{ steps.setup.outputs.repo_name }}.log"
         echo "================================================"
 
     # =======================================================
@@ -188,6 +201,7 @@ jobs:
         PORT="${{ steps.parse.outputs.port }}"
         REPO="${{ steps.setup.outputs.repo_name }}"
         SUBDOMAIN="${{ steps.setup.outputs.subdomain }}"
+        SERVER_IP="${{ secrets.SERVER_IP }}"
         cat >> $GITHUB_STEP_SUMMARY << EOF
         ## 🐾 Kucingarong Deployment Report
         
@@ -199,7 +213,17 @@ jobs:
         - **Commit**: \`${{ github.sha }}\`
         
         ### 🔗 Access Your Application
-        [🌍 **Visit App**](https://$SUBDOMAIN.akhzafachrozy.my.id)
+        EOF
+
+        if [ -n "$SERVER_IP" ]; then
+          echo "**Direct URL**: [http://$SERVER_IP:$PORT](http://$SERVER_IP:$PORT)" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "**Direct URL**: \`http://YOUR_SERVER_IP:$PORT\`" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        cat >> $GITHUB_STEP_SUMMARY << EOF
+        
+        > 💡 **Note**: Setup Cloudflare Tunnel manually to get custom domain
         
         ---
         
@@ -207,8 +231,9 @@ jobs:
         | Item | Path / Command |
         |------|----------------|
         | **Laravel Service** | \`laravel-$REPO\` |
-        | **Tunnel Service** | \`cloudflared-$REPO\` |
-        | **Logs** | \`/var/log/bg_lite_$REPO.log\` |
+        | **App Directory** | \`/www/wwwroot/hosting/$REPO\` |
+        | **Background Log** | \`/var/log/bg_lite_$REPO.log\` |
+        | **Laravel Log** | \`/var/log/laravel-$REPO.log\` |
         | **Port** | \`$PORT\` |
         | **Deploy Log** | \`/www/wwwroot/deploy.log\` |
         
@@ -216,17 +241,20 @@ jobs:
         
         ### ⚙️ Useful Commands
         \`\`\`bash
-        # Check Laravel service
+        # Check Laravel service status
         sudo systemctl status laravel-$REPO
         
-        # Check Cloudflare Tunnel
-        sudo systemctl status cloudflared-$REPO
-        
-        # View Laravel logs
+        # View Laravel realtime logs
         sudo journalctl -u laravel-$REPO -f
+        
+        # View background deployment logs
+        sudo tail -f /var/log/bg_lite_$REPO.log
         
         # Restart Laravel service
         sudo systemctl restart laravel-$REPO
+        
+        # Access application directory
+        cd /www/wwwroot/hosting/$REPO
         \`\`\`
         
         ---
@@ -235,21 +263,24 @@ jobs:
 
         if [ "$MODE" = "full" ]; then
           cat >> $GITHUB_STEP_SUMMARY << 'EOF'
-        1. 📦 Files uploaded (full)
-        2. 🧩 Environment setup (.env)
-        3. 🔑 Laravel key generated
-        4. ⚙️ Composer install
-        5. 🚀 Laravel service started
-        6. 🌐 Cloudflare tunnel established
+        1. ✅ Files uploaded (full)
+        2. ✅ Environment setup (.env)
+        3. ✅ Storage directories created
+        4. ✅ Composer install
+        5. ✅ Laravel key generated
+        6. ✅ Database migrations
+        7. ✅ Cache optimization
+        8. ✅ Laravel service started
         
         **Estimated time:** 2–5 minutes
         EOF
         else
           cat >> $GITHUB_STEP_SUMMARY << 'EOF'
-        1. 📦 Incremental files uploaded
-        2. 🔄 Composer update (if needed)
-        3. 🧹 Cache cleared
-        4. 🚀 Service restarted
+        1. ✅ Incremental files uploaded
+        2. ✅ Files synced intelligently
+        3. ✅ Composer update (if needed)
+        4. ✅ Cache cleared & rebuilt
+        5. ✅ Service restarted
         
         **Estimated time:** 30–60 seconds
         EOF
@@ -258,7 +289,26 @@ jobs:
         cat >> $GITHUB_STEP_SUMMARY << EOF
         
         ---
+        
+        ### 🌐 Setup Cloudflare Tunnel (Manual)
+        \`\`\`bash
+        # Install cloudflared if not installed
+        wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+        sudo dpkg -i cloudflared-linux-amd64.deb
+        
+        # Create tunnel
+        cloudflared tunnel create $SUBDOMAIN
+        
+        # Configure tunnel to point to port $PORT
+        cloudflared tunnel route dns $SUBDOMAIN $SUBDOMAIN.yourdomain.com
+        
+        # Run tunnel
+        cloudflared tunnel --url http://localhost:$PORT run $SUBDOMAIN
+        \`\`\`
+        
+        ---
         ⏱️ *Deployment started at: $(date)*  
         ✅ **Laravel running on port:** $PORT  
-        🐾 *Powered by Kucingarong Lite Deploy v5.5*
+        📁 **Location:** \`/www/wwwroot/hosting/$REPO\`  
+        🐾 *Powered by Kucingarong Lite Deploy v6.0*
         EOF
