@@ -37,7 +37,7 @@ jobs:
         env:
           # ⚙️ Ganti ke URL server kamu
           # Disarankan: gunakan IP langsung atau DNS-only (tanpa Cloudflare proxy)
-          AUTOHOST_URL: "http://103.xxx.xxx.xxx"  # atau "https://cicak.akhzafachrozy.my.id"
+          AUTOHOST_URL: "cicak.akhzafachrozy.my.id"  # atau "https://cicak.akhzafachrozy.my.id"
           REPO_NAME: ${{ github.event.repository.name }}
         run: |
           echo "🚀 Deploying $REPO_NAME to $AUTOHOST_URL..."
