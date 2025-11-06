@@ -1,4 +1,4 @@
-name: Auto Deploy to Kucingarong
+name: 🚀 Auto Deploy to Kucingarong (Async)
 
 on:
   push:
@@ -6,28 +6,55 @@ on:
       - main
       - development
       - feature/**
+  workflow_dispatch:
 
 jobs:
   deploy:
+    name: 🔧 Deploy Laravel Project
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      # ============================
+      # 🧩 1. Checkout Repository
+      # ============================
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Zip Repository
-        run: zip -r deploy.zip . -x "*.git*" "*.github*"
+      # ============================
+      # 📦 2. Prepare Deploy ZIP
+      # ============================
+      - name: Create Deploy Archive
+        run: |
+          echo "📦 Zipping project..."
+          zip -r deploy.zip . \
+            -x "*.git*" "*.github*" "node_modules/*" "vendor/*" "storage/*" \
+            "*.env" "*.log" "tests/*"
 
+      # ============================
+      # 🚀 3. Upload to STB Server
+      # ============================
       - name: Deploy to Kucingarong AutoHost
         env:
-          AUTOHOST_URL: "https://cicak.akhzafachrozy.my.id"
+          # ⚙️ Ganti ke URL server kamu
+          # Disarankan: gunakan IP langsung atau DNS-only (tanpa Cloudflare proxy)
+          AUTOHOST_URL: "http://103.xxx.xxx.xxx"  # atau "https://cicak.akhzafachrozy.my.id"
           REPO_NAME: ${{ github.event.repository.name }}
         run: |
           echo "🚀 Deploying $REPO_NAME to $AUTOHOST_URL..."
-          RESPONSE=$(curl -s -S -k -m 240 --connect-timeout 15 \
+          echo "🕓 $(date)"
+          
+          RESPONSE=$(curl -s -S -m 300 --connect-timeout 15 \
             -X POST \
             -F "repo=$REPO_NAME" \
             -F "file=@deploy.zip" \
             "$AUTOHOST_URL")
-          echo "📜 ===== RESPONSE ====="
+          
+          echo "📜 ====== SERVER RESPONSE ======"
           echo "$RESPONSE"
-          echo "📜 ===================="
+          echo "📜 ============================="
+
+      # ============================
+      # 🧹 4. Optional Cleanup
+      # ============================
+      - name: Cleanup workspace
+        run: rm -f deploy.zip
